@@ -18,6 +18,7 @@ export const theme = {
     body: 34,
     caption: 28,
     stat: 72,
+    tweetName: 68,
   },
   spacing: {
     page: 60,

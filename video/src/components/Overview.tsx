@@ -31,7 +31,6 @@ const CountUp: React.FC<CountUpProps> = ({ value, label, delay }) => {
         flexDirection: "column",
         alignItems: "center",
         gap: theme.spacing.gap / 2,
-        flex: 1,
       }}
     >
       <div
@@ -58,13 +57,13 @@ const CountUp: React.FC<CountUpProps> = ({ value, label, delay }) => {
 };
 
 interface OverviewProps {
-  builders: number;
-  selected: number;
+  builderNames: string[];
 }
 
-export const Overview: React.FC<OverviewProps> = ({ builders, selected }) => {
+export const Overview: React.FC<OverviewProps> = ({ builderNames }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
+  const builders = builderNames.length;
 
   const headerOpacity = interpolate(frame, [0, 15], [0, 1], {
     extrapolateRight: "clamp",
@@ -85,7 +84,7 @@ export const Overview: React.FC<OverviewProps> = ({ builders, selected }) => {
         flexDirection: "column",
         gap: theme.spacing.gap * 2,
         fontFamily: theme.fonts.primary,
-        padding: `0 ${theme.spacing.page}px`,
+        padding: `0 ${theme.spacing.page}px ${theme.spacing.page + 240}px`,
       }}
     >
       <div
@@ -102,15 +101,36 @@ export const Overview: React.FC<OverviewProps> = ({ builders, selected }) => {
       </div>
       <div
         style={{
-          display: "flex",
-          flexDirection: "row",
           width: "100%",
-          justifyContent: "space-around",
-          alignItems: "center",
+          display: "flex",
+          justifyContent: "center",
         }}
       >
         <CountUp value={builders} label="构建者" delay={0} />
-        <CountUp value={selected} label="精选动态" delay={10} />
+      </div>
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 900,
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          columnGap: theme.spacing.gap * 2,
+          rowGap: theme.spacing.gap / 2,
+        }}
+      >
+        {builderNames.map((name, index) => (
+          <div
+            key={`${name}-${index}`}
+            style={{
+              color: theme.colors.textSecondary,
+              fontSize: 24,
+              textAlign: "center",
+              lineHeight: 1.3,
+            }}
+          >
+            {name}
+          </div>
+        ))}
       </div>
     </AbsoluteFill>
   );

@@ -15,6 +15,7 @@ export const RemotionRoot: React.FC = () => {
         segments: [],
         date: "2026-03-27",
         stats: { builders: 0, podcasts: 0, blogs: 0 },
+        builderNames: [],
       } satisfies CompositionProps}
       calculateMetadata={({ props }) => {
         const totalFrames = props.segments.reduce(

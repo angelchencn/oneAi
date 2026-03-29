@@ -49,6 +49,12 @@ function parseJsonText(text) {
   }
 }
 
+function isUnavailableTransportError(message) {
+  return /ECONNREFUSED|ECONNRESET|ENOTFOUND|EHOSTUNREACH|fetch failed|network error/i.test(
+    message,
+  );
+}
+
 export class ChromeMcpClient {
   constructor({ mcpUrl = DEFAULT_MCP_URL } = {}) {
     const AgentToolBridge = loadBridgeClass();
@@ -61,7 +67,7 @@ export class ChromeMcpClient {
       return await this.bridge.callTool({ tool, args });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/ECONNREFUSED|fetch failed|connect/i.test(message)) {
+      if (isUnavailableTransportError(message)) {
         throw new Error(
           `Chrome MCP server is unavailable at ${this.mcpUrl}. Start the Chrome MCP extension/native host and retry.`,
         );

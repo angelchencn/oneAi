@@ -12,7 +12,7 @@ import { VideoBg } from "./components/VideoBg";
 function renderSegment(
   segment: SegmentWithAudio,
   date: string,
-  stats: { builders: number; podcasts: number; blogs: number },
+  builderNames: string[],
 ): React.ReactNode {
   const { type, display } = segment;
 
@@ -22,12 +22,11 @@ function renderSegment(
     case "overview":
       return (
         <Overview
-          builders={stats.builders}
-          selected={stats.builders}
+          builderNames={builderNames}
         />
       );
     case "tweet":
-      return <TweetCard />;
+      return <TweetCard title={display.title} />;
     case "podcast":
       return (
         <PodcastCard
@@ -53,9 +52,9 @@ function renderSegment(
 export const VideoComposition: React.FC<CompositionProps> = ({
   segments,
   date,
-  stats,
+  builderNames,
 }) => {
-  const resolvedStats = stats ?? { builders: 0, podcasts: 0, blogs: 0 };
+  const resolvedBuilderNames = builderNames ?? [];
   let cumulativeFrames = 0;
 
   return (
@@ -66,7 +65,7 @@ export const VideoComposition: React.FC<CompositionProps> = ({
 
         const content = (
           <>
-            {renderSegment(segment, date, resolvedStats)}
+            {renderSegment(segment, date, resolvedBuilderNames)}
             <Subtitle
               text={segment.text}
               durationInFrames={segment.durationInFrames}

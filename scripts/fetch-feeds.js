@@ -9,40 +9,16 @@
 
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { loadBuildersConfig } from "./lib/builders-config.js";
 import { fetchXViaChromeMcp } from "./lib/fetch-x-via-chrome-mcp.js";
 import { buildFeedX } from "./lib/x-feed-export.js";
+import { getChinaDateStamp } from "./lib/china-time.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "..", "data");
-
-// ---------------------------------------------------------------------------
-// Builder list (X/Twitter handles)
-// ---------------------------------------------------------------------------
-
-const BUILDERS = [
-  { name: "Andrej Karpathy", handle: "karpathy" },
-  { name: "Sam Altman", handle: "sama" },
-  { name: "Swyx", handle: "swyx" },
-  { name: "Guillermo Rauch", handle: "rauchg" },
-  { name: "Amjad Masad", handle: "amasad" },
-  { name: "Aaron Levie", handle: "levie" },
-  { name: "Garry Tan", handle: "garrytan" },
-  { name: "Alex Albert", handle: "alexalbert__" },
-  { name: "Josh Woodward", handle: "joshwoodward" },
-  { name: "Peter Yang", handle: "petergyang" },
-  { name: "Nan Yu", handle: "thenanyu" },
-  { name: "Cat Wu", handle: "_catwu" },
-  { name: "Thariq", handle: "trq212" },
-  { name: "Matt Turck", handle: "mattturck" },
-  { name: "Zara Zhang", handle: "zarazhangrui" },
-  { name: "Nikunj Kothari", handle: "nikunj" },
-  { name: "Peter Steinberger", handle: "steipete" },
-  { name: "Dan Shipper", handle: "danshipper" },
-  { name: "Aditya Agarwal", handle: "adityaag" },
-  { name: "Claude", handle: "claudeai" },
-];
+const ROOT = join(__dirname, "..");
+const DATA_DIR = join(ROOT, "data");
 
 // ---------------------------------------------------------------------------
 // Podcast RSS feeds
@@ -250,31 +226,31 @@ async function fetchBlog(blog) {
   }
 }
 
-function getLocalDateString() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-async function main() {
+export async function fetchFeeds({
+  date = getChinaDateStamp(),
+  dataDir = DATA_DIR,
+  chromeMcpClient = null,
+  builders = null,
+  podcasts = PODCASTS,
+  blogs = BLOGS,
+} = {}) {
   console.log("=== Fetch Feeds ===\n");
 
   await loadEnv();
-  if (!existsSync(DATA_DIR)) await mkdir(DATA_DIR, { recursive: true });
+  if (!existsSync(dataDir)) await mkdir(dataDir, { recursive: true });
+  const resolvedBuilders = builders || await loadBuildersConfig({ rootDir: ROOT });
 
   // 1. Fetch Twitter/X via Chrome MCP
-  const fetchDate = getLocalDateString();
-  console.log(`Fetching X/Twitter via Chrome MCP for ${fetchDate}...`);
+  console.log(`Fetching X/Twitter via Chrome MCP for ${date}...`);
   const xResults = await fetchXViaChromeMcp({
-    builders: BUILDERS,
-    date: fetchDate,
-    dataDir: DATA_DIR,
+    builders: resolvedBuilders,
+    date,
+    dataDir,
+    client: chromeMcpClient,
   });
 
   const feedX = buildFeedX({
@@ -283,13 +259,13 @@ async function main() {
     accounts: xResults,
   });
 
-  await writeFile(join(DATA_DIR, "feed-x.json"), JSON.stringify(feedX, null, 2));
+  await writeFile(join(dataDir, "feed-x.json"), JSON.stringify(feedX, null, 2));
   console.log(`\nX/Twitter: ${feedX.stats.xBuilders} builders, ${feedX.stats.totalTweets} tweets\n`);
 
   // 2. Fetch Podcasts
   console.log("Fetching Podcasts via RSS...");
   const allEpisodes = [];
-  for (const podcast of PODCASTS) {
+  for (const podcast of podcasts) {
     const episodes = await fetchPodcast(podcast);
     allEpisodes.push(...episodes);
   }
@@ -303,13 +279,13 @@ async function main() {
     },
   };
 
-  await writeFile(join(DATA_DIR, "feed-podcasts.json"), JSON.stringify(feedPodcasts, null, 2));
+  await writeFile(join(dataDir, "feed-podcasts.json"), JSON.stringify(feedPodcasts, null, 2));
   console.log(`\nPodcasts: ${feedPodcasts.stats.podcastEpisodes} episodes\n`);
 
   // 3. Fetch Blogs
   console.log("Fetching Blogs via RSS...");
   const allPosts = [];
-  for (const blog of BLOGS) {
+  for (const blog of blogs) {
     const posts = await fetchBlog(blog);
     allPosts.push(...posts);
   }
@@ -323,7 +299,7 @@ async function main() {
     },
   };
 
-  await writeFile(join(DATA_DIR, "feed-blogs.json"), JSON.stringify(feedBlogs, null, 2));
+  await writeFile(join(dataDir, "feed-blogs.json"), JSON.stringify(feedBlogs, null, 2));
   console.log(`\nBlogs: ${feedBlogs.stats.blogPosts} posts\n`);
 
   // Summary
@@ -333,11 +309,27 @@ async function main() {
   console.log(`  Builders: ${feedX.stats.xBuilders} with tweets (${feedX.stats.totalTweets} total)`);
   console.log(`  Podcasts: ${feedPodcasts.stats.podcastEpisodes} episodes`);
   console.log(`  Blogs:    ${feedBlogs.stats.blogPosts} posts`);
-  console.log(`  Data dir: ${DATA_DIR}`);
+  console.log(`  Data dir: ${dataDir}`);
   console.log("========================================\n");
+
+  return {
+    date,
+    dataDir,
+    feedX,
+    feedPodcasts,
+    feedBlogs,
+  };
 }
 
-main().catch((err) => {
-  console.error(`ERROR: ${err.message}`);
-  process.exit(1);
-});
+async function main() {
+  await fetchFeeds();
+}
+
+const isDirectRun = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error(`ERROR: ${err.message}`);
+    process.exit(1);
+  });
+}

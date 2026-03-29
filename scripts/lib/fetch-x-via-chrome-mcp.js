@@ -7,17 +7,7 @@ import {
   writeJsonFile,
 } from "./x-storage.js";
 import { ChromeMcpClient } from "./chrome-mcp-client.js";
-
-function buildLocalDayWindow(date) {
-  const [year, month, day] = String(date).split("-").map(Number);
-  const start = new Date(year, month - 1, day, 0, 0, 0, 0);
-  const end = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
-
-  return {
-    startIso: start.toISOString(),
-    endIso: end.toISOString(),
-  };
-}
+import { buildChinaDayWindow } from "./china-time.js";
 
 function normalizeText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
@@ -320,51 +310,58 @@ async function archiveAccount(dataDir, { date, generatedAt, account, errors = []
   );
 }
 
-export async function fetchXViaChromeMcp({ builders, date, dataDir }) {
+export async function fetchXViaChromeMcp({ builders, date, dataDir, client = null }) {
   const generatedAt = new Date().toISOString();
-  const client = new ChromeMcpClient();
-  await client.assertAvailable();
+  const activeClient = client || new ChromeMcpClient();
+  const ownsClient = !client;
+  try {
+    await activeClient.assertAvailable();
 
-  const windowRange = buildLocalDayWindow(date);
-  const accounts = [];
+    const windowRange = buildChinaDayWindow(date);
+    const accounts = [];
 
-  for (const builder of builders) {
-    const baseAccount = createEmptyAccount(builder);
-    try {
-      const extracted = await fetchAccountData(client, builder, windowRange);
-      const tweets = await hydrateTweetImages(dataDir, {
-        date,
-        handle: builder.handle,
-        tweets: extracted.tweets,
-      });
+    for (const builder of builders) {
+      const baseAccount = createEmptyAccount(builder);
+      try {
+        const extracted = await fetchAccountData(activeClient, builder, windowRange);
+        const tweets = await hydrateTweetImages(dataDir, {
+          date,
+          handle: builder.handle,
+          tweets: extracted.tweets,
+        });
 
-      const account = {
-        ...baseAccount,
-        bio: extracted.bio,
-        avatarUrl: extracted.avatarUrl,
-        tweets,
-      };
+        const account = {
+          ...baseAccount,
+          bio: extracted.bio,
+          avatarUrl: extracted.avatarUrl,
+          tweets,
+        };
 
-      await archiveAccount(dataDir, {
-        date,
-        generatedAt,
-        account,
-      });
+        await archiveAccount(dataDir, {
+          date,
+          generatedAt,
+          account,
+        });
 
-      console.log(`  [${tweets.length > 0 ? "OK" : "EMPTY"}] @${builder.handle}: ${tweets.length} tweets`);
-      accounts.push(account);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await archiveAccount(dataDir, {
-        date,
-        generatedAt,
-        account: baseAccount,
-        errors: [message],
-      });
-      console.log(`  [FAIL] @${builder.handle}: ${message}`);
-      accounts.push(baseAccount);
+        console.log(`  [${tweets.length > 0 ? "OK" : "EMPTY"}] @${builder.handle}: ${tweets.length} tweets`);
+        accounts.push(account);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await archiveAccount(dataDir, {
+          date,
+          generatedAt,
+          account: baseAccount,
+          errors: [message],
+        });
+        console.log(`  [FAIL] @${builder.handle}: ${message}`);
+        accounts.push(baseAccount);
+      }
+    }
+
+    return accounts;
+  } finally {
+    if (ownsClient) {
+      await activeClient.close?.();
     }
   }
-
-  return accounts;
 }

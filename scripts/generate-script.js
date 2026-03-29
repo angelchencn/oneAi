@@ -18,6 +18,10 @@ import {
   formatTweetNarration,
   shouldUseChineseRewrite,
 } from "./lib/tweet-script.js";
+import {
+  formatChinaDisplayDate,
+  getChinaDateStamp,
+} from "./lib/china-time.js";
 
 const KEYWORD_WEIGHTS = [
   ["launch", 2.5],
@@ -101,14 +105,6 @@ function toSlug(text) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 48);
-}
-
-function zhDate() {
-  return new Date().toLocaleDateString("zh-CN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
 }
 
 function hoursAgo(isoString) {
@@ -203,8 +199,8 @@ function curateDigest(digest) {
   };
 }
 
-function buildIntroSegment(curated) {
-  const date = zhDate();
+function buildIntroSegment(curated, scriptDate) {
+  const date = formatChinaDisplayDate(scriptDate);
   return {
     id: "intro",
     type: "intro",
@@ -443,9 +439,10 @@ async function readStdin() {
 async function main() {
   const digest = parseJSON(await readStdin(), "digest JSON from stdin");
   const curated = curateDigest(digest);
+  const scriptDate = getChinaDateStamp();
 
   const baseSegments = [
-    buildIntroSegment(curated),
+    buildIntroSegment(curated, scriptDate),
     buildOverviewSegment(curated),
     ...curated.tweets.map((item) => buildTweetSegment(item)),
     buildOutroSegment(),
@@ -466,7 +463,7 @@ async function main() {
 
   const videoScript = {
     generatedAt: new Date().toISOString(),
-    date: new Date().toISOString().slice(0, 10),
+    date: scriptDate,
     estimatedDurationSeconds: Math.round(totalDuration(segments)),
     segmentCount: segments.length,
     stats: {

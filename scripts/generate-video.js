@@ -14,6 +14,7 @@ import { writeFile, readFile, mkdir, rm, copyFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join, dirname, basename, extname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { fetchFeeds } from "./fetch-feeds.js";
 import {
   ensureAudioOutputPath,
   verifyAudioOutputFile,
@@ -23,6 +24,10 @@ import {
   captureSelectedTweetScreenshots,
 } from "./lib/tweet-screenshots.js";
 import { assignSegmentBackgrounds } from "./lib/background-assignment.js";
+import { resolveBackgroundDir } from "./lib/background-assets.js";
+import { loadBuildersConfig } from "./lib/builders-config.js";
+import { ChromeMcpClient } from "./lib/chrome-mcp-client.js";
+import { getChinaDateStamp } from "./lib/china-time.js";
 import { hasReusablePrebuiltAudio } from "./lib/prebuilt-script.js";
 
 const execFileAsync = promisify(execFile);
@@ -55,7 +60,7 @@ function sleep(ms) {
 function parseArgs(argv) {
   const args = {
     scriptPath: null,
-    backgroundDir: process.env.BACKGROUND_DIR || null,
+    backgroundDir: null,
     skipFetch: false,
     send: false,
   };
@@ -177,23 +182,10 @@ async function listBackgroundAssets(backgroundDir) {
     });
 }
 
-async function runFetchFeeds() {
+async function runFetchFeeds({ chromeMcpClient = null } = {}) {
   log("Step 1/6 — Fetching latest feeds...");
-  await new Promise((resolve, reject) => {
-    const child = spawn("node", [join(__dirname, "fetch-feeds.js")], {
-      stdio: "inherit",
-      env: process.env,
-    });
-
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`fetch-feeds.js exited with code ${code}`));
-        return;
-      }
-      resolve();
-    });
-
-    child.on("error", reject);
+  await fetchFeeds({
+    chromeMcpClient,
   });
 }
 
@@ -422,133 +414,152 @@ async function sendToTelegram(videoPath, chatId, date) {
 async function run() {
   const startedAt = Date.now();
   const args = parseArgs(process.argv);
+  let sharedChromeMcpClient = null;
 
-  await loadEnv();
-  await mkdir(AUDIO_DIR, { recursive: true });
-  await mkdir(VIDEO_DIR, { recursive: true });
-  await ensureCleanPublicDirs();
+  try {
+    await loadEnv();
+    const builderNames = (await loadBuildersConfig({ rootDir: ROOT })).map(({ name }) => name);
+    sharedChromeMcpClient =
+      !args.scriptPath && !args.skipFetch ? new ChromeMcpClient() : null;
+    const backgroundDir = resolveBackgroundDir({
+      rootDir: ROOT,
+      cliBackgroundDir: args.backgroundDir,
+    });
+    await mkdir(AUDIO_DIR, { recursive: true });
+    await mkdir(VIDEO_DIR, { recursive: true });
+    await ensureCleanPublicDirs();
 
-  const backgroundAssets = await listBackgroundAssets(args.backgroundDir);
+    const backgroundAssets = await listBackgroundAssets(backgroundDir);
 
-  let videoScript;
-  let stats;
+    let videoScript;
+    let stats;
 
-  if (args.scriptPath) {
-    log("Loading prebuilt script...");
-    videoScript = JSON.parse(await readFile(args.scriptPath, "utf-8"));
-    stats = {
-      xBuilders: videoScript.segments.filter((segment) => segment.type === "tweet").length,
-      podcastEpisodes: videoScript.segments.filter((segment) => segment.type === "podcast").length,
-      blogPosts: videoScript.segments.filter((segment) => segment.type === "blog").length,
-    };
-  } else {
-    if (!args.skipFetch) {
-      await runFetchFeeds();
+    if (args.scriptPath) {
+      log("Loading prebuilt script...");
+      videoScript = JSON.parse(await readFile(args.scriptPath, "utf-8"));
+      stats = {
+        xBuilders: videoScript.segments.filter((segment) => segment.type === "tweet").length,
+        podcastEpisodes: videoScript.segments.filter((segment) => segment.type === "podcast").length,
+        blogPosts: videoScript.segments.filter((segment) => segment.type === "blog").length,
+      };
     } else {
-      log("Step 1/6 — Skipping feed fetch, using local data.");
+      if (!args.skipFetch) {
+        await runFetchFeeds({
+          chromeMcpClient: sharedChromeMcpClient,
+        });
+      } else {
+        log("Step 1/6 — Skipping feed fetch, using local data.");
+      }
+
+      const digest = await runPrepareDigest();
+      stats = digest.stats;
+
+      const hasContent =
+        (stats?.xBuilders || 0) > 0 ||
+        (stats?.podcastEpisodes || 0) > 0 ||
+        (stats?.blogPosts || 0) > 0;
+
+      if (!hasContent) {
+        log("No content found in digest. Exiting early.");
+        process.exit(0);
+      }
+
+      log(
+        `Digest loaded: ${stats.xBuilders} builders, ${stats.podcastEpisodes} podcasts, ${stats.blogPosts} blogs`,
+      );
+      videoScript = await runGenerateScript(digest);
+      log(
+        `Script generated: ${videoScript.segmentCount} segments, ~${videoScript.estimatedDurationSeconds}s`,
+      );
     }
 
-    const digest = await runPrepareDigest();
-    stats = digest.stats;
+    log("Step 4/6 — Capturing tweet screenshots for selected segments...");
+    const resolvedDate = videoScript.date || getChinaDateStamp();
+    const screenshotMap = await captureSelectedTweetScreenshots({
+      segments: videoScript.segments,
+      date: resolvedDate,
+      screenshotsRootDir: SCREENSHOT_DIR,
+      minScreenshotWidth: args.scriptPath ? 0 : undefined,
+      createClient: sharedChromeMcpClient
+        ? () => sharedChromeMcpClient
+        : undefined,
+    });
 
-    const hasContent =
-      (stats?.xBuilders || 0) > 0 ||
-      (stats?.podcastEpisodes || 0) > 0 ||
-      (stats?.blogPosts || 0) > 0;
+    const withTweetScreenshots = applyTweetScreenshotBackgrounds(
+      videoScript.segments,
+      screenshotMap,
+    );
+    const withBackgrounds = assignSegmentBackgrounds(withTweetScreenshots, backgroundAssets);
+    const canReusePrebuiltAudio = args.scriptPath && hasReusablePrebuiltAudio(
+      withBackgrounds,
+      (audioFile) => existsSync(join(OUTPUT, audioFile)),
+    );
+    const enrichedSegments = canReusePrebuiltAudio
+      ? withBackgrounds
+      : await generateTTSForSegments(withBackgrounds);
 
-    if (!hasContent) {
-      log("No content found in digest. Exiting early.");
-      process.exit(0);
+    if (canReusePrebuiltAudio) {
+      log(`Step 4/6 — Reusing prebuilt audio and timing for ${withBackgrounds.length} segments...`);
     }
 
-    log(
-      `Digest loaded: ${stats.xBuilders} builders, ${stats.podcastEpisodes} podcasts, ${stats.blogPosts} blogs`,
+    const scriptWithAudioPath = join(OUTPUT, "script-with-audio.json");
+    await writeFile(
+      scriptWithAudioPath,
+      JSON.stringify({ ...videoScript, segments: enrichedSegments }, null, 2),
+      "utf-8",
     );
-    videoScript = await runGenerateScript(digest);
-    log(
-      `Script generated: ${videoScript.segmentCount} segments, ~${videoScript.estimatedDurationSeconds}s`,
+    log(`Wrote enriched script to ${scriptWithAudioPath}`);
+
+    const date = resolvedDate;
+    const srtPath = join(VIDEO_DIR, `digest-${date}.srt`);
+    await writeSrtFile(enrichedSegments, srtPath);
+    log(`Wrote subtitles to ${srtPath}`);
+
+    await copyAssetsToPublic(enrichedSegments, backgroundAssets);
+
+    const remotionProps = {
+      segments: enrichedSegments,
+      date,
+      stats: {
+        builders: builderNames.length,
+        podcasts: stats.podcastEpisodes || 0,
+        blogs: stats.blogPosts || 0,
+      },
+      builderNames,
+    };
+
+    const remotionPropsPath = join(OUTPUT, "remotion-props.json");
+    await writeFile(remotionPropsPath, JSON.stringify(remotionProps, null, 2), "utf-8");
+    log(`Wrote Remotion props to ${remotionPropsPath}`);
+
+    const outputFile = join(VIDEO_DIR, `digest-${date}.mp4`);
+    await renderVideo(remotionPropsPath, outputFile);
+
+    const totalAudioSegments = enrichedSegments.filter((segment) => segment.audioFile).length;
+    const totalEstimatedSegments = enrichedSegments.length - totalAudioSegments;
+    const totalDurationSeconds = enrichedSegments.reduce(
+      (sum, segment) => sum + segment.durationInSeconds,
+      0,
     );
-  }
+    const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
 
-  log("Step 4/6 — Capturing tweet screenshots for selected segments...");
-  const screenshotMap = await captureSelectedTweetScreenshots({
-    segments: videoScript.segments,
-    date: videoScript.date || new Date().toISOString().slice(0, 10),
-    screenshotsRootDir: SCREENSHOT_DIR,
-    minScreenshotWidth: args.scriptPath ? 0 : undefined,
-  });
+    console.log("\n========================================");
+    console.log(" Daily Video Complete");
+    console.log("========================================");
+    console.log(`  Video:          ${outputFile}`);
+    console.log(`  Subtitles:      ${srtPath}`);
+    console.log(`  Segments:       ${enrichedSegments.length}`);
+    console.log(`  TTS audio:      ${totalAudioSegments} ok, ${totalEstimatedSegments} estimated`);
+    console.log(`  Backgrounds:    ${backgroundAssets.length}`);
+    console.log(`  Duration:       ${totalDurationSeconds.toFixed(1)}s`);
+    console.log(`  Elapsed time:   ${elapsedSeconds}s`);
+    console.log("========================================\n");
 
-  const withTweetScreenshots = applyTweetScreenshotBackgrounds(
-    videoScript.segments,
-    screenshotMap,
-  );
-  const withBackgrounds = assignSegmentBackgrounds(withTweetScreenshots, backgroundAssets);
-  const canReusePrebuiltAudio = args.scriptPath && hasReusablePrebuiltAudio(
-    withBackgrounds,
-    (audioFile) => existsSync(join(OUTPUT, audioFile)),
-  );
-  const enrichedSegments = canReusePrebuiltAudio
-    ? withBackgrounds
-    : await generateTTSForSegments(withBackgrounds);
-
-  if (canReusePrebuiltAudio) {
-    log(`Step 4/6 — Reusing prebuilt audio and timing for ${withBackgrounds.length} segments...`);
-  }
-
-  const scriptWithAudioPath = join(OUTPUT, "script-with-audio.json");
-  await writeFile(
-    scriptWithAudioPath,
-    JSON.stringify({ ...videoScript, segments: enrichedSegments }, null, 2),
-    "utf-8",
-  );
-  log(`Wrote enriched script to ${scriptWithAudioPath}`);
-
-  const date = videoScript.date || new Date().toISOString().slice(0, 10);
-  const srtPath = join(VIDEO_DIR, `digest-${date}.srt`);
-  await writeSrtFile(enrichedSegments, srtPath);
-  log(`Wrote subtitles to ${srtPath}`);
-
-  await copyAssetsToPublic(enrichedSegments, backgroundAssets);
-
-  const remotionProps = {
-    segments: enrichedSegments,
-    date,
-    stats: {
-      builders: stats.xBuilders || 0,
-      podcasts: stats.podcastEpisodes || 0,
-      blogs: stats.blogPosts || 0,
-    },
-  };
-
-  const remotionPropsPath = join(OUTPUT, "remotion-props.json");
-  await writeFile(remotionPropsPath, JSON.stringify(remotionProps, null, 2), "utf-8");
-  log(`Wrote Remotion props to ${remotionPropsPath}`);
-
-  const outputFile = join(VIDEO_DIR, `digest-${date}.mp4`);
-  await renderVideo(remotionPropsPath, outputFile);
-
-  const totalAudioSegments = enrichedSegments.filter((segment) => segment.audioFile).length;
-  const totalEstimatedSegments = enrichedSegments.length - totalAudioSegments;
-  const totalDurationSeconds = enrichedSegments.reduce(
-    (sum, segment) => sum + segment.durationInSeconds,
-    0,
-  );
-  const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
-
-  console.log("\n========================================");
-  console.log(" Daily Video Complete");
-  console.log("========================================");
-  console.log(`  Video:          ${outputFile}`);
-  console.log(`  Subtitles:      ${srtPath}`);
-  console.log(`  Segments:       ${enrichedSegments.length}`);
-  console.log(`  TTS audio:      ${totalAudioSegments} ok, ${totalEstimatedSegments} estimated`);
-  console.log(`  Backgrounds:    ${backgroundAssets.length}`);
-  console.log(`  Duration:       ${totalDurationSeconds.toFixed(1)}s`);
-  console.log(`  Elapsed time:   ${elapsedSeconds}s`);
-  console.log("========================================\n");
-
-  if (args.send) {
-    await sendToTelegram(outputFile, "8361396438", date);
+    if (args.send) {
+      await sendToTelegram(outputFile, "8361396438", date);
+    }
+  } finally {
+    await sharedChromeMcpClient?.close?.();
   }
 }
 

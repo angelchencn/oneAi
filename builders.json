@@ -1,0 +1,22 @@
+[
+  { "name": "Andrej Karpathy", "handle": "karpathy" },
+  { "name": "Sam Altman", "handle": "sama" },
+  { "name": "Swyx", "handle": "swyx" },
+  { "name": "Guillermo Rauch", "handle": "rauchg" },
+  { "name": "Amjad Masad", "handle": "amasad" },
+  { "name": "Aaron Levie", "handle": "levie" },
+  { "name": "Garry Tan", "handle": "garrytan" },
+  { "name": "Alex Albert", "handle": "alexalbert__" },
+  { "name": "Josh Woodward", "handle": "joshwoodward" },
+  { "name": "Peter Yang", "handle": "petergyang" },
+  { "name": "Nan Yu", "handle": "thenanyu" },
+  { "name": "Cat Wu", "handle": "_catwu" },
+  { "name": "Thariq", "handle": "trq212" },
+  { "name": "Matt Turck", "handle": "mattturck" },
+  { "name": "Zara Zhang", "handle": "zarazhangrui" },
+  { "name": "Nikunj Kothari", "handle": "nikunj" },
+  { "name": "Peter Steinberger", "handle": "steipete" },
+  { "name": "Dan Shipper", "handle": "danshipper" },
+  { "name": "Aditya Agarwal", "handle": "adityaag" },
+  { "name": "Claude", "handle": "claudeai" }
+]

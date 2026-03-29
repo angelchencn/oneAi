@@ -2,11 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 
-function runGenerateScript(input) {
+function runGenerateScript(input, { env = {}, nodeArgs = [] } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", ["scripts/generate-script.js"], {
+    const child = spawn("node", [...nodeArgs, "scripts/generate-script.js"], {
       cwd: process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        ...env,
+      },
     });
 
     const stdout = [];
@@ -117,4 +121,42 @@ test("generate-script avoids repeating tweet lead-in phrasing in narration", asy
     "Josh Woodward 发布的这条动态，主要在讲视频生成能力更新，重点是 Gemini 里的 Veo 视频能力仍然可以直接使用。",
   );
   assert.doesNotMatch(tweetSegment.text, /这条动态主要在讲这条动态主要在讲|主要在讲这条动态主要在讲/);
+});
+
+test("generate-script uses GMT+8 for both script metadata and intro copy", async () => {
+  const digest = {
+    x: [
+      {
+        name: "Sam Altman",
+        handle: "sama",
+        bio: "OpenAI",
+        avatarUrl: "",
+        tweets: [
+          {
+            id: "1",
+            text: "Shipping another model update for coding.",
+            createdAt: "2026-03-28T17:30:00.000Z",
+            url: "https://x.com/sama/status/1",
+            likes: 1000,
+            retweets: 200,
+            replies: 80,
+          },
+        ],
+      },
+    ],
+    podcasts: [],
+    blogs: [],
+  };
+
+  const script = await runGenerateScript(digest, {
+    nodeArgs: ["--import", "./scripts/tests/helpers/freeze-date.mjs"],
+    env: {
+      TZ: "America/Los_Angeles",
+      ONEAI_TEST_NOW: "2026-03-28T18:30:00.000Z",
+    },
+  });
+
+  assert.equal(script.date, "2026-03-29");
+  assert.equal(script.segments[0].display.subtitle, "2026年3月29日");
+  assert.match(script.segments[0].text, /今天是2026年3月29日/);
 });
