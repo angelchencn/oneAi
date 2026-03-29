@@ -1,0 +1,11 @@
+{
+  "name": "oneai-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fetch": "node fetch-feeds.js",
+    "prepare-digest": "node prepare-digest.js",
+    "video": "node generate-video.js"
+  }
+}

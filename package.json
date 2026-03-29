@@ -1,0 +1,10 @@
+{
+  "name": "oneai-daily-video",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix scripts && npm install --prefix video",
+    "fetch": "npm --prefix scripts run fetch",
+    "video": "npm --prefix scripts run video",
+    "studio": "npm --prefix video run start"
+  }
+}

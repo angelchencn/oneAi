@@ -1,0 +1,7 @@
+node_modules/
+data/
+output/
+release/
+.env
+video/public/audio/
+video/public/backgrounds/
